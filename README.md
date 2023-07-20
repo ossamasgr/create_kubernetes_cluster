@@ -1,1 +1,178 @@
 # create_kubernetes_cluster
+## 1 Installing a container runtime
+
+Set up the repository
+1. Update the apt package index and install packages to allow apt to use a repository over HTTPS:
+
+```bash
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg
+```
+
+2. Add Docker’s official GPG key:
+
+```bash
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+```
+
+3. Use the following command to set up the repository:
+   
+```bash
+echo \
+  "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+```
+
+#### Install Docker Engine
+Update the apt package index:
+
+```bash
+sudo apt-get update
+```
+
+Install Docker Engine, containerd, and Docker Compose.
+
+```bash
+ sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Verify that the Docker Engine installation is successful by running the hello-world image.
+
+```bash
+ sudo docker run hello-world
+```
+
+## 2 Installing kubeadm, kubelet and kubectl 
+
+Update the apt package index and install packages needed to use the Kubernetes apt repository:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y apt-transport-https ca-certificates curl
+```
+Download the Google Cloud public signing key:
+
+```bash
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg
+```
+
+Add the Kubernetes apt repository:
+
+```bash
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+```
+
+Update apt package index, install kubelet, kubeadm and kubectl, and pin their version:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+```
+
+## 3 Creating a cluster with kubeadm
+Initialize the control plane using the following command
+
+```bash
+sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+```
+Execute the following commands to configure kubectl (also returned by kubeadm init).
+
+```bash
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+```
+## 4 Install Calico
+Remove the taints on the control plane so that you can schedule pods on it
+
+```bash
+kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+kubectl taint nodes --all node-role.kubernetes.io/master-
+```
+
+Install the Tigera Calico operator and custom resource definitions.
+
+```bash
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/tigera-operator.yaml
+```
+install Calico by creating the necessary custom resource. For more information on configuration options available in this manifest
+
+```bash
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/custom-resources.yaml
+```
+
+Confirm that all of the pods are running with the following command.
+
+```bash
+watch kubectl get pods -n calico-system
+```
+
+## 5 Install the dashboard 
+
+The Dashboard UI is not deployed by default. To deploy it, run the following command:
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+```
+
+verify that pods are running : 
+
+```bash
+kubectl get pods -n kubernetes-dashboard
+```
+output : 
+```
+dashboard-metrics-scraper-5cb4f4bb9c-prcwb   1/1     Running   0          14s
+kubernetes-dashboard-6967859bff-lc8qs        1/1     Running   0          14s
+```
+patch svc to nodeport 
+
+first note the service to expose : 
+```bash
+kubectl get svc -n kubernetes-dashboard
+```
+output : 
+```bash
+NAME                        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+dashboard-metrics-scraper   ClusterIP   10.97.30.230    <none>        8000/TCP   66s
+kubernetes-dashboard        ClusterIP   10.96.120.174   <none>        443/TCP    66s
+```
+patch it to nodeport : 
+
+```bash
+kubectl patch svc kubernetes-dashboard -n kubernetes-dashboard -p '{"spec": {"type": "NodePort"}}'
+```
+
+get services now to verify it's nodeport : 
+
+```bash
+user@master:~# kubectl get svc -n kubernetes-dashboard
+NAME                        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)         AGE
+dashboard-metrics-scraper   ClusterIP   10.97.30.230    <none>        8000/TCP        3m15s
+kubernetes-dashboard        NodePort    10.96.120.174   <none>        443:31076/TCP   3m15s
+```
+
+**note** the kubernetes-dashboard is now nodeport with additional port 443:**31076**/TCP
+
+to access the kubernetes dashboard use your node public IP with the port generated 
+
+<node IP address:31076>
+in your case it won't be 317076 but auto generated by kubernetes 
+
+
+## 6 Join worker nodes 
+To print the join token from the Kubernetes master node, you can use the kubeadm command. The join token is required for worker nodes to join the cluster. Here's the command to retrieve the join token:
+
+```bash
+sudo kubeadm token create --print-join-command
+```
+the output should be something like this : 
+
+```bash
+kubeadm join 10.0.0.2:6443 --token kcz7em.a92uej1os69usy3v --discovery-token-ca-cert-hash sha256:f35beabbeb8asdf89cad90b442f6270b89ab6412179769359b900c7
+```
+
+you can type then this command in your desired worker node to join the cluster
